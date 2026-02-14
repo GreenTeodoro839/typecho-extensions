@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+</head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:'Helvetica Neue',Helvetica,Arial,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:30px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+    <tr>
+        <td style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px 40px;">
+            <h1 style="margin:0;color:#fff;font-size:22px;font-weight:500;">💬 您的评论收到了新回复</h1>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:30px 40px;">
+            <p style="color:#555;font-size:15px;line-height:1.6;margin:0 0 20px;">
+                <strong>{originalAuthor}</strong>，您好！您在文章
+                <a href="{postUrl}" style="color:#667eea;text-decoration:none;font-weight:500;">「{postTitle}」</a>
+                中的评论收到了来自 <strong>{author}</strong>{authorTag} 的回复：
+            </p>
+
+            <div style="background:#f0f3ff;border-left:4px solid #667eea;padding:15px 20px;border-radius:0 6px 6px 0;margin:0 0 20px;">
+                <p style="margin:0 0 5px;font-size:13px;color:#999;">回复内容：</p>
+                <p style="margin:0;color:#333;font-size:15px;line-height:1.8;">{replyContent}</p>
+            </div>
+
+            <div style="background:#f9f9f9;border-left:4px solid #ddd;padding:15px 20px;border-radius:0 6px 6px 0;margin:0 0 25px;">
+                <p style="margin:0 0 5px;font-size:13px;color:#999;">您的原始评论：</p>
+                <p style="margin:0;color:#666;font-size:14px;line-height:1.8;">{originalContent}</p>
+            </div>
+
+            <a href="{postUrl}" style="display:inline-block;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:10px 28px;border-radius:5px;text-decoration:none;font-size:14px;">查看完整内容</a>
+        </td>
+    </tr>
+    <tr>
+        <td style="background:#fafafa;padding:20px 40px;border-top:1px solid #eee;">
+            <p style="margin:0;color:#999;font-size:12px;text-align:center;">
+                此邮件由 <a href="{blogUrl}" style="color:#667eea;text-decoration:none;">{blogName}</a> 自动发送 · {year}
+            </p>
+        </td>
+    </tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>
