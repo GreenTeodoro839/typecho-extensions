@@ -32,11 +32,18 @@ class Action extends Widget implements ActionInterface
         // 验证用户登录状态
         $user = \Widget\User::alloc();
         if (!$user->hasLogin()) {
-            $this->sendJson(['success' => false, 'message' => '请先登录']);
-            return;
+            if ($this->request->is('do=generate') && !$this->request->is('token')) {
+                $this->sendJson(['success' => false, 'message' => '请先登录']);
+                return;
+            }
+            throw new \Typecho\Widget\Exception('请先登录', 403);
         }
 
-        if ($this->request->is('do=generate')) {
+        if ($this->request->is('do=generate') && $this->request->get('token')) {
+            // 管理面板批量/单篇生成 (GET请求，带token验证)
+            $this->generateFromPanel();
+        } elseif ($this->request->is('do=generate')) {
+            // 编辑器按钮生成 (AJAX POST请求)
             $this->generate();
         } else {
             $this->sendJson(['success' => false, 'message' => '未知操作']);
@@ -44,7 +51,7 @@ class Action extends Widget implements ActionInterface
     }
 
     /**
-     * 生成摘要
+     * 编辑器按钮：生成摘要（返回JSON）
      */
     private function generate()
     {
@@ -89,12 +96,130 @@ class Action extends Widget implements ActionInterface
             return;
         }
 
+        $result = $this->callAiAndGetResult($title, $text);
+        $this->sendJson($result);
+    }
+
+    /**
+     * 管理面板：批量/单篇生成摘要（写入数据库并重定向）
+     */
+    private function generateFromPanel()
+    {
+        // 验证token
+        $requestToken = $this->request->get('token', '');
+        try {
+            $settingToken = Options::alloc()->plugin('AISummary')->token;
+        } catch (\Exception $e) {
+            throw new \Typecho\Widget\Exception('插件配置未找到', 500);
+        }
+
+        if (empty($requestToken) || $requestToken !== $settingToken) {
+            throw new \Typecho\Widget\Exception('令牌验证失败', 403);
+        }
+
+        $cids = $this->request->filter('int')->getArray('cid');
+        if (empty($cids)) {
+            $this->widget('Widget_Notice')->set(_t('未选择任何文章'), null, 'notice');
+            $this->response->goBack();
+            return;
+        }
+
+        $db = \Typecho\Db::get();
+        $successCount = 0;
+        $failCount = 0;
+
+        foreach ($cids as $cid) {
+            $cid = intval($cid);
+            if ($cid <= 0) continue;
+
+            // 取出文章内容
+            $post = $db->fetchRow(
+                $db->select('title', 'text')->from('table.contents')
+                    ->where('cid = ?', $cid)
+            );
+
+            if (!$post) {
+                $failCount++;
+                continue;
+            }
+
+            $title = $post['title'];
+            $text  = preg_replace('/^<!--markdown-->/', '', $post['text']);
+
+            if (empty(trim($text))) {
+                $failCount++;
+                continue;
+            }
+
+            // 调用AI生成摘要
+            $result = $this->callAiAndGetResult($title, $text);
+
+            if (!$result['success']) {
+                $failCount++;
+                continue;
+            }
+
+            $summary = $result['summary'];
+
+            // 写入 customSummary 自定义字段
+            $exist = $db->fetchRow(
+                $db->select('cid')->from('table.fields')
+                    ->where('cid = ? AND name = ?', $cid, 'customSummary')
+            );
+
+            $rows = [
+                'type'        => 'str',
+                'str_value'   => $summary,
+                'int_value'   => 0,
+                'float_value' => 0,
+            ];
+
+            if (empty($exist)) {
+                $rows['cid']  = $cid;
+                $rows['name'] = 'customSummary';
+                $db->query($db->insert('table.fields')->rows($rows));
+            } else {
+                $db->query(
+                    $db->update('table.fields')->rows($rows)
+                        ->where('cid = ? AND name = ?', $cid, 'customSummary')
+                );
+            }
+
+            $successCount++;
+        }
+
+        // 提示信息
+        if ($failCount > 0) {
+            $this->widget('Widget_Notice')->set(
+                _t('已生成 %d 篇摘要，%d 篇失败', $successCount, $failCount),
+                null,
+                $successCount > 0 ? 'success' : 'error'
+            );
+        } else {
+            $this->widget('Widget_Notice')->set(
+                _t('已成功生成 %d 篇AI摘要', $successCount),
+                null,
+                'success'
+            );
+        }
+
+        $this->response->goBack();
+    }
+
+    /**
+     * 调用AI生成摘要，返回统一格式结果
+     *
+     * @param string $title 文章标题
+     * @param string $text  文章内容
+     * @return array ['success' => bool, 'summary' => string] 或 ['success' => false, 'message' => string]
+     */
+    private function callAiAndGetResult($title, $text)
+    {
         // 获取插件配置
         try {
             $plugin = Options::alloc()->plugin('AISummary');
         } catch (\Exception $e) {
-            $this->sendJson(['success' => false, 'message' => '插件配置未找到，请先在插件设置中完成配置']);
-            return;
+            return ['success' => false, 'message' => '插件配置未找到，请先在插件设置中完成配置'];
         }
 
         $apiUrl         = $plugin->apiUrl;
@@ -104,16 +229,14 @@ class Action extends Widget implements ActionInterface
         $maxLength      = intval($plugin->maxLength) > 0 ? intval($plugin->maxLength) : 20000;
 
         if (empty($apiKey)) {
-            $this->sendJson(['success' => false, 'message' => '请先在插件设置中配置 API Key']);
-            return;
+            return ['success' => false, 'message' => '请先在插件设置中配置 API Key'];
         }
 
         if (empty($apiUrl)) {
-            $this->sendJson(['success' => false, 'message' => '请先在插件设置中配置 API 地址']);
-            return;
+            return ['success' => false, 'message' => '请先在插件设置中配置 API 地址'];
         }
 
-        // 截断过长内容，避免超出API token限制
+        // 截断过长内容
         if (mb_strlen($text, 'UTF-8') > $maxLength) {
             $text = mb_substr($text, 0, $maxLength, 'UTF-8') . "\n...(内容已截断)";
         }
@@ -125,9 +248,7 @@ class Action extends Widget implements ActionInterface
             $promptTemplate
         );
 
-        // 调用AI接口
-        $result = $this->callApi($apiUrl, $apiKey, $model, $prompt);
-        $this->sendJson($result);
+        return $this->callApi($apiUrl, $apiKey, $model, $prompt);
     }
 
     /**
@@ -155,7 +276,6 @@ class Action extends Widget implements ActionInterface
         $error    = '';
 
         if (function_exists('curl_init')) {
-            // 使用cURL
             $ch = curl_init($url);
             curl_setopt_array($ch, [
                 CURLOPT_POST           => true,
@@ -176,7 +296,6 @@ class Action extends Widget implements ActionInterface
             $error    = curl_error($ch);
             curl_close($ch);
         } else {
-            // 回退到 file_get_contents
             $context = stream_context_create([
                 'http' => [
                     'method'  => 'POST',

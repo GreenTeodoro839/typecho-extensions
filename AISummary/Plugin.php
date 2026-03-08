@@ -6,6 +6,7 @@ use Typecho\Plugin\PluginInterface;
 use Typecho\Widget\Helper\Form;
 use Typecho\Widget\Helper\Form\Element\Text;
 use Typecho\Widget\Helper\Form\Element\Textarea;
+use Typecho\Widget\Helper\Form\Element\Radio;
 use Widget\Options;
 
 if (!defined('__TYPECHO_ROOT_DIR__')) {
@@ -17,7 +18,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package AISummary
  * @author 小猪
- * @version 1.0.0
+ * @version 1.1.0
  * @link https://www.zcec.top
  */
 class Plugin implements PluginInterface
@@ -27,8 +28,20 @@ class Plugin implements PluginInterface
      */
     public static function activate()
     {
+        // 编辑器按钮
         \Typecho\Plugin::factory('admin/write-post.php')->bottom = __CLASS__ . '::renderButton';
         \Typecho\Plugin::factory('admin/write-page.php')->bottom = __CLASS__ . '::renderButton';
+
+        // 正文显示摘要
+        \Typecho\Plugin::factory('Widget_Abstract_Contents')->contentEx = __CLASS__ . '::customContent';
+
+        // 自定义CSS加载到头部
+        \Typecho\Plugin::factory('Widget_Archive')->header = __CLASS__ . '::header';
+
+        // 管理面板
+        \Utils\Helper::addPanel(3, 'AISummary/manage-summaries.php', '摘要', '管理AI摘要', 'administrator');
+
+        // Action路由
         \Utils\Helper::addAction('ai-summary', Action::class);
     }
 
@@ -37,6 +50,7 @@ class Plugin implements PluginInterface
      */
     public static function deactivate()
     {
+        \Utils\Helper::removePanel(3, 'AISummary/manage-summaries.php');
         \Utils\Helper::removeAction('ai-summary');
     }
 
@@ -47,6 +61,7 @@ class Plugin implements PluginInterface
      */
     public static function config(Form $form)
     {
+        // ========== API 设置 ==========
         $apiUrl = new Text(
             'apiUrl',
             null,
@@ -91,6 +106,44 @@ class Plugin implements PluginInterface
             _t('使用 {title} 代表文章标题，{content} 代表文章内容')
         );
         $form->addInput($prompt);
+
+        // ========== 正文摘要显示设置 ==========
+        $summaryStyle = new Radio(
+            'summaryStyle',
+            ['0' => '不显示', '1' => '使用默认引用样式', '2' => '使用自定义样式'],
+            '0',
+            _t('正文摘要显示样式'),
+            _t('选择在正文开头以何种样式显示摘要')
+        );
+        $form->addInput($summaryStyle);
+
+        $prefix = new Text(
+            'prefix',
+            null,
+            '<strong>AI摘要：</strong>{{text}}',
+            _t('正文摘要模板'),
+            _t('正文中摘要的显示模板，用 {{text}} 代表摘要内容，仅在正文摘要显示时生效')
+        );
+        $form->addInput($prefix);
+
+        $css = new Textarea(
+            'css',
+            null,
+            "<style>\n.aisummary{\n}\n</style>",
+            _t('自定义样式'),
+            _t('加载到 head 标签中的自定义 CSS，摘要元素 class="aisummary"，需包含 &lt;style&gt; 标签。如无需求可留空')
+        );
+        $form->addInput($css);
+
+        // ========== 管理面板设置 ==========
+        $token = new Text(
+            'token',
+            null,
+            self::createUuid(),
+            _t('请求令牌'),
+            _t('用于管理面板批量生成摘要的请求验证令牌')
+        );
+        $form->addInput($token);
     }
 
     /**
@@ -100,6 +153,47 @@ class Plugin implements PluginInterface
      */
     public static function personalConfig(Form $form)
     {
+    }
+
+    /**
+     * 在正文开头插入摘要显示
+     *
+     * @param string $content 文章正文
+     * @param mixed  $widget  文章对象
+     * @return string
+     */
+    public static function customContent($content, $widget)
+    {
+        $options = Options::alloc()->plugin('AISummary');
+        if ($options->summaryStyle === '0') {
+            return $content;
+        }
+
+        $summary = $widget->fields->customSummary;
+        if (empty($summary)) {
+            return $content;
+        }
+
+        $summaryHtml = str_replace('{{text}}', htmlspecialchars($summary), $options->prefix);
+
+        if ($options->summaryStyle === '1') {
+            $block = '<blockquote class="aisummary">' . $summaryHtml . '</blockquote>';
+        } else {
+            $block = '<div class="aisummary">' . $summaryHtml . '</div>';
+        }
+
+        return $block . $content;
+    }
+
+    /**
+     * 在 head 中加载自定义 CSS
+     */
+    public static function header()
+    {
+        $css = Options::alloc()->plugin('AISummary')->css;
+        if (!empty($css)) {
+            echo $css;
+        }
     }
 
     /**
@@ -211,5 +305,25 @@ class Plugin implements PluginInterface
         })(jQuery);
         </script>
         <?php
+    }
+
+    /**
+     * 生成UUID
+     *
+     * @return string
+     */
+    public static function createUuid()
+    {
+        return sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff)
+        );
     }
 }
