@@ -15,7 +15,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package TypechoMcp
  * @author GreenTeodoro839
- * @version 1.1.0
+ * @version 1.2.0
  * @since 1.3.0
  * @link https://github.com/GreenTeodoro839/typecho-extensions
  */
