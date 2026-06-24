@@ -18,7 +18,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 class Action extends Widget implements ActionInterface
 {
     private const SERVER_NAME = 'typecho-mcp';
-    private const SERVER_VERSION = '1.1.0';
+    private const SERVER_VERSION = '1.2.0';
     private const LATEST_PROTOCOL = '2025-11-25';
     private const SUPPORTED_PROTOCOLS = [
         '2025-11-25',
@@ -230,6 +230,15 @@ class Action extends Widget implements ActionInterface
                 'annotations' => ['readOnlyHint' => true, 'idempotentHint' => true],
             ],
             [
+                'name' => 'get_attachment',
+                'title' => '读取附件详情',
+                'description' => '按附件 cid 读取文件名、类型、大小、URL、状态和关联文章。',
+                'inputSchema' => $this->objectSchema([
+                    'cid' => ['type' => 'integer', 'minimum' => 1],
+                ], ['cid']),
+                'annotations' => ['readOnlyHint' => true, 'idempotentHint' => true],
+            ],
+            [
                 'name' => 'upload_file',
                 'title' => '上传图片或文件',
                 'description' => '通过 Base64 上传附件，可选关联到文章。文件扩展名受 Typecho 全局附件白名单限制。',
@@ -239,6 +248,22 @@ class Action extends Widget implements ActionInterface
                     'parent_cid' => ['type' => 'integer', 'minimum' => 0, 'default' => 0],
                 ], ['filename', 'data_base64']),
                 'annotations' => ['destructiveHint' => false, 'idempotentHint' => false],
+            ],
+            [
+                'name' => 'delete_attachment',
+                'title' => '删除附件',
+                'description' => '永久删除一个附件文件及其 Typecho 数据库记录。必须明确传入 confirm=true。',
+                'inputSchema' => $this->objectSchema([
+                    'cid' => ['type' => 'integer', 'minimum' => 1],
+                    'confirm' => [
+                        'type' => 'boolean',
+                        'description' => '必须为 true，表示确认永久删除',
+                    ],
+                ], ['cid', 'confirm']),
+                'annotations' => [
+                    'destructiveHint' => true,
+                    'idempotentHint' => false,
+                ],
             ],
         ];
     }
@@ -388,8 +413,14 @@ class Action extends Widget implements ActionInterface
                 case 'list_attachments':
                     $data = $this->listAttachments($arguments);
                     break;
+                case 'get_attachment':
+                    $data = $this->getAttachment($this->positiveInt($arguments, 'cid'));
+                    break;
                 case 'upload_file':
                     $data = $this->uploadFile($arguments);
+                    break;
+                case 'delete_attachment':
+                    $data = $this->deleteAttachment($arguments);
                     break;
                 default:
                     throw new \InvalidArgumentException('未知工具: ' . $name);
@@ -667,6 +698,11 @@ class Action extends Widget implements ActionInterface
         ];
     }
 
+    private function getAttachment(int $cid): array
+    {
+        return $this->formatAttachment($this->attachmentRow($cid));
+    }
+
     private function uploadFile(array $args): array
     {
         $filename = trim((string)($args['filename'] ?? ''));
@@ -751,6 +787,47 @@ class Action extends Widget implements ActionInterface
             'status' => $parent > 0 ? 'hidden' : 'publish',
             'text' => json_encode($upload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
+    }
+
+    private function deleteAttachment(array $args): array
+    {
+        $cid = $this->positiveInt($args, 'cid');
+        if (!array_key_exists('confirm', $args) || $args['confirm'] !== true) {
+            throw new \InvalidArgumentException('删除附件必须明确传入 confirm=true');
+        }
+
+        $row = $this->attachmentRow($cid);
+        $attachment = json_decode((string)$row['text'], true);
+        if (!is_array($attachment) || empty($attachment['path'])) {
+            throw new \InvalidArgumentException('附件存储信息无效，已停止删除');
+        }
+
+        $before = $this->formatAttachment($row);
+        $deletedFile = Upload::deleteHandle([
+            'cid' => $cid,
+            'attachment' => new Config($attachment),
+            'parent' => (int)$row['parent'],
+        ]);
+        if (!$deletedFile) {
+            throw new \RuntimeException('附件文件删除失败，数据库记录未改动');
+        }
+
+        $this->db->query($this->db->delete('table.comments')->where('cid = ?', $cid));
+        $this->db->query($this->db->delete('table.fields')->where('cid = ?', $cid));
+        $this->db->query($this->db->delete('table.relationships')->where('cid = ?', $cid));
+        $deletedRows = $this->db->query(
+            $this->db->delete('table.contents')
+                ->where('cid = ?', $cid)
+                ->where('type = ?', 'attachment')
+        );
+        if ($deletedRows < 1) {
+            throw new \RuntimeException('附件文件已删除，但数据库记录删除失败');
+        }
+
+        return [
+            'deleted' => true,
+            'attachment' => $before,
+        ];
     }
 
     private function formatPost(array $row, bool $includeContent, bool $includeMetas): array
@@ -1031,6 +1108,20 @@ class Action extends Widget implements ActionInterface
         return array_map([$this, 'formatAttachment'], $rows);
     }
 
+    private function attachmentRow(int $cid): array
+    {
+        $row = $this->db->fetchRow(
+            $this->db->select()->from('table.contents')
+                ->where('cid = ?', $cid)
+                ->where('type = ?', 'attachment')
+                ->limit(1)
+        );
+        if (!$row) {
+            throw new \InvalidArgumentException('附件不存在');
+        }
+        return $row;
+    }
+
     private function formatAttachment(array $row): array
     {
         $attachment = json_decode((string)$row['text'], true);
@@ -1051,6 +1142,7 @@ class Action extends Widget implements ActionInterface
             'parent_cid' => (int)$row['parent'],
             'status' => (string)$row['status'],
             'created' => $this->formatTime((int)$row['created']),
+            'modified' => $this->formatTime((int)$row['modified']),
         ];
     }
 
